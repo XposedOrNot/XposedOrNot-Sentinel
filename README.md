@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/XposedOrNot/XposedOrNot-Sentinel/main/images/logo.svg" alt="XposedOrNot Logo" width="120">
+  <img src="./images/logo.svg" alt="XposedOrNot Logo" width="120">
 </p>
 
 ## Why Breach Intelligence in Your SIEM?
@@ -116,7 +116,7 @@ The connector starts automatically. Just wait for data to show up.
 ## Workbook Preview
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/XposedOrNot/XposedOrNot-Sentinel/main/images/workbook-screenshot.png" alt="XposedOrNot Sentinel Workbook" width="800">
+  <img src="./images/workbook-screenshot.png" alt="XposedOrNot Sentinel Workbook" width="800">
 </p>
 
 *Breach intelligence workbook showing exposure analytics, risk breakdown, and timeline.*
