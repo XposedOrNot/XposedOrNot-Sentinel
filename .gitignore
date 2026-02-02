@@ -1,0 +1,60 @@
+# Azure
+*.parameters.local.json
+.azure/
+azds.yaml
+
+# Secrets
+*.secret
+*.secrets
+*secrets.json
+*.env
+.env
+.env.*
+
+# API Keys
+*apikey*
+*api-key*
+
+# Terraform (if used)
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Build outputs
+dist/
+build/
+out/
+
+# Node (if used for testing)
+node_modules/
+
+# Python (if used for testing)
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+.venv/
+
+# Temp files
+*.tmp
+*.temp
+.cache/
+
+# Claude
+.claude/

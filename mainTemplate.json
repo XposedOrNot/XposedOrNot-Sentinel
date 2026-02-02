@@ -1,0 +1,801 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "2.0.0.0",
+  "metadata": {
+    "title": "XposedOrNot for Microsoft Sentinel",
+    "description": "Breach intelligence data connector with workbook and analytics rule",
+    "version": "2.0.0",
+    "author": "XposedOrNot (https://xposedornot.com)",
+    "comments": "Simplified template - removed unused resources and fragile automation"
+  },
+  "parameters": {
+    "workspaceName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of your Log Analytics workspace with Microsoft Sentinel enabled"
+      }
+    },
+    "workspaceResourceGroup": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource group containing the Log Analytics workspace"
+      }
+    },
+    "xonApiKey": {
+      "type": "securestring",
+      "metadata": {
+        "displayName": "XposedOrNot API Key",
+        "description": "Your XposedOrNot API Key from plus.xposedornot.com"
+      }
+    },
+    "deployWorkbook": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Deploy the XposedOrNot breach intelligence workbook"
+      }
+    },
+    "deployAnalyticsRule": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Deploy the breach detection analytics rule"
+      }
+    },
+    "pollingFrequencyHours": {
+      "type": "int",
+      "defaultValue": 12,
+      "allowedValues": [
+        1,
+        6,
+        12,
+        24
+      ],
+      "metadata": {
+        "description": "How often to poll the XposedOrNot API (hours)"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources"
+      }
+    },
+    "baseTime": {
+      "type": "string",
+      "defaultValue": "[utcNow()]",
+      "metadata": {
+        "description": "Base time for deployment (used for scheduling)"
+      }
+    }
+  },
+  "variables": {
+    "solutionPrefix": "xon",
+    "uniqueSuffix": "[uniqueString(resourceGroup().id)]",
+    "keyVaultName": "[concat('kv-', variables('solutionPrefix'), '-', take(variables('uniqueSuffix'), 8))]",
+    "dceName": "[concat('dce-', variables('solutionPrefix'), '-', variables('uniqueSuffix'))]",
+    "dcrName": "[concat('dcr-', variables('solutionPrefix'), '-', variables('uniqueSuffix'))]",
+    "logicAppName": "[concat('logic-', variables('solutionPrefix'), '-connector-', variables('uniqueSuffix'))]",
+    "workspaceResourceId": "[resourceId(parameters('workspaceResourceGroup'), 'Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]",
+    "workbookId": "[guid(resourceGroup().id, 'xon-workbook')]",
+    "monitoringMetricsPublisherRoleId": "3913510d-42f4-4e42-8a64-420c390055eb",
+    "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6",
+    "kvRoleAssignmentName": "[guid(resourceGroup().id, variables('logicAppName'), 'KeyVaultSecretsUser')]",
+    "dcrRoleAssignmentName": "[guid(resourceGroup().id, variables('logicAppName'), 'MonitoringMetricsPublisher')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('keyVaultName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "[subscription().tenantId]",
+        "enableRbacAuthorization": true,
+        "enableSoftDelete": true,
+        "softDeleteRetentionInDays": 7,
+        "networkAcls": {
+          "defaultAction": "Allow",
+          "bypass": "AzureServices"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[concat(variables('keyVaultName'), '/xon-api-key')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ],
+      "properties": {
+        "value": "[parameters('xonApiKey')]",
+        "contentType": "XposedOrNot API Key",
+        "attributes": {
+          "enabled": true
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionEndpoints",
+      "apiVersion": "2022-06-01",
+      "name": "[variables('dceName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "description": "Data collection endpoint for XposedOrNot breach data",
+        "networkAcls": {
+          "publicNetworkAccess": "Enabled"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "xon-custom-table",
+      "resourceGroup": "[parameters('workspaceResourceGroup')]",
+      "properties": {
+        "mode": "Incremental",
+        "expressionEvaluationOptions": {
+          "scope": "outer"
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "resources": [
+            {
+              "type": "Microsoft.OperationalInsights/workspaces/tables",
+              "apiVersion": "2022-10-01",
+              "name": "[concat(parameters('workspaceName'), '/XonBreachDetails_CL')]",
+              "properties": {
+                "schema": {
+                  "name": "XonBreachDetails_CL",
+                  "columns": [
+                    {
+                      "name": "TimeGenerated",
+                      "type": "datetime"
+                    },
+                    {
+                      "name": "Email",
+                      "type": "string"
+                    },
+                    {
+                      "name": "EmailDomain",
+                      "type": "string"
+                    },
+                    {
+                      "name": "Domain",
+                      "type": "string"
+                    },
+                    {
+                      "name": "BreachName",
+                      "type": "string"
+                    },
+                    {
+                      "name": "BreachedDate",
+                      "type": "datetime"
+                    },
+                    {
+                      "name": "PasswordRisk",
+                      "type": "string"
+                    },
+                    {
+                      "name": "ExposedDataTypes",
+                      "type": "string"
+                    },
+                    {
+                      "name": "ExposedRecords",
+                      "type": "real"
+                    },
+                    {
+                      "name": "BreachDescription",
+                      "type": "string"
+                    },
+                    {
+                      "name": "BreachLogo",
+                      "type": "string"
+                    },
+                    {
+                      "name": "IsSearchable",
+                      "type": "boolean"
+                    },
+                    {
+                      "name": "SnapshotId",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "retentionInDays": 90,
+                "totalRetentionInDays": 365
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionRules",
+      "apiVersion": "2022-06-01",
+      "name": "[variables('dcrName')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/dataCollectionEndpoints', variables('dceName'))]",
+        "xon-custom-table"
+      ],
+      "properties": {
+        "description": "Data collection rule for XposedOrNot breach intelligence",
+        "dataCollectionEndpointId": "[resourceId('Microsoft.Insights/dataCollectionEndpoints', variables('dceName'))]",
+        "streamDeclarations": {
+          "Custom-XonBreachDetails_CL": {
+            "columns": [
+              {
+                "name": "TimeGenerated",
+                "type": "datetime"
+              },
+              {
+                "name": "Email",
+                "type": "string"
+              },
+              {
+                "name": "EmailDomain",
+                "type": "string"
+              },
+              {
+                "name": "Domain",
+                "type": "string"
+              },
+              {
+                "name": "BreachName",
+                "type": "string"
+              },
+              {
+                "name": "BreachedDate",
+                "type": "datetime"
+              },
+              {
+                "name": "PasswordRisk",
+                "type": "string"
+              },
+              {
+                "name": "ExposedDataTypes",
+                "type": "string"
+              },
+              {
+                "name": "ExposedRecords",
+                "type": "real"
+              },
+              {
+                "name": "BreachDescription",
+                "type": "string"
+              },
+              {
+                "name": "BreachLogo",
+                "type": "string"
+              },
+              {
+                "name": "IsSearchable",
+                "type": "boolean"
+              },
+              {
+                "name": "SnapshotId",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "destinations": {
+          "logAnalytics": [
+            {
+              "workspaceResourceId": "[variables('workspaceResourceId')]",
+              "name": "sentinelWorkspace"
+            }
+          ]
+        },
+        "dataFlows": [
+          {
+            "streams": [
+              "Custom-XonBreachDetails_CL"
+            ],
+            "destinations": [
+              "sentinelWorkspace"
+            ],
+            "transformKql": "source",
+            "outputStream": "Custom-XonBreachDetails_CL"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[variables('logicAppName')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/dataCollectionRules', variables('dcrName'))]"
+      ],
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "DCE_Endpoint": {
+              "type": "String"
+            },
+            "DCR_ImmutableId": {
+              "type": "String"
+            },
+            "KeyVaultName": {
+              "type": "String"
+            }
+          },
+          "triggers": {
+            "Scheduled_Poll": {
+              "type": "Recurrence",
+              "recurrence": {
+                "frequency": "Hour",
+                "interval": "[parameters('pollingFrequencyHours')]",
+                "startTime": "[dateTimeAdd(parameters('baseTime'), 'PT2M')]"
+              }
+            }
+          },
+          "actions": {
+            "Initialize_RunId": {
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "RunId",
+                    "type": "string",
+                    "value": "@{guid()}"
+                  }
+                ]
+              },
+              "runAfter": {}
+            },
+            "Initialize_ProcessedCount": {
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "ProcessedCount",
+                    "type": "integer",
+                    "value": 0
+                  }
+                ]
+              },
+              "runAfter": {
+                "Initialize_RunId": [
+                  "Succeeded"
+                ]
+              }
+            },
+            "Get_API_Key": {
+              "type": "Http",
+              "inputs": {
+                "method": "GET",
+                "uri": "https://@{parameters('KeyVaultName')}.vault.azure.net/secrets/xon-api-key?api-version=7.4",
+                "authentication": {
+                  "type": "ManagedServiceIdentity",
+                  "audience": "https://vault.azure.net"
+                }
+              },
+              "runAfter": {
+                "Initialize_ProcessedCount": [
+                  "Succeeded"
+                ]
+              },
+              "runtimeConfiguration": {
+                "secureData": {
+                  "properties": [
+                    "outputs"
+                  ]
+                }
+              }
+            },
+            "Call_XposedOrNot_API": {
+              "type": "Http",
+              "inputs": {
+                "method": "POST",
+                "uri": "https://api.xposedornot.com/v1/domain-breaches/",
+                "headers": {
+                  "Content-Type": "application/json",
+                  "User-Agent": "MicrosoftSentinel-XposedOrNot/2.0",
+                  "x-api-key": "@body('Get_API_Key')?['value']"
+                },
+                "retryPolicy": {
+                  "type": "exponential",
+                  "count": 3,
+                  "interval": "PT30S",
+                  "maximumInterval": "PT5M"
+                }
+              },
+              "runAfter": {
+                "Get_API_Key": [
+                  "Succeeded"
+                ]
+              },
+              "runtimeConfiguration": {
+                "secureData": {
+                  "properties": [
+                    "inputs"
+                  ]
+                }
+              }
+            },
+            "Parse_Response": {
+              "type": "Compose",
+              "inputs": {
+                "records": "@coalesce(body('Call_XposedOrNot_API')?['metrics']?['Breaches_Details'], createArray())",
+                "breachInfo": "@coalesce(body('Call_XposedOrNot_API')?['metrics']?['Detailed_Breach_Info'], json('{}'))"
+              },
+              "runAfter": {
+                "Call_XposedOrNot_API": [
+                  "Succeeded"
+                ]
+              }
+            },
+            "Check_Has_Records": {
+              "type": "If",
+              "expression": {
+                "and": [
+                  {
+                    "greater": [
+                      "@length(outputs('Parse_Response')?['records'])",
+                      0
+                    ]
+                  }
+                ]
+              },
+              "actions": {
+                "Process_In_Batches": {
+                  "type": "Until",
+                  "expression": "@greaterOrEquals(variables('ProcessedCount'), length(outputs('Parse_Response')?['records']))",
+                  "limit": {
+                    "count": 200,
+                    "timeout": "PT2H"
+                  },
+                  "actions": {
+                    "Get_Batch": {
+                      "type": "Compose",
+                      "inputs": "@take(skip(outputs('Parse_Response')?['records'], variables('ProcessedCount')), 500)",
+                      "runAfter": {}
+                    },
+                    "Transform_Records": {
+                      "type": "Select",
+                      "inputs": {
+                        "from": "@outputs('Get_Batch')",
+                        "select": {
+                          "TimeGenerated": "@utcNow()",
+                          "Email": "@item()?['email']",
+                          "EmailDomain": "@last(split(coalesce(item()?['email'], 'unknown@unknown'), '@'))",
+                          "Domain": "@coalesce(item()?['domain'], '')",
+                          "BreachName": "@item()?['breach']",
+                          "BreachedDate": "@coalesce(outputs('Parse_Response')?['breachInfo']?[item()?['breach']]?['breached_date'], '')",
+                          "PasswordRisk": "@coalesce(outputs('Parse_Response')?['breachInfo']?[item()?['breach']]?['password_risk'], 'Unknown')",
+                          "ExposedDataTypes": "@coalesce(outputs('Parse_Response')?['breachInfo']?[item()?['breach']]?['xposed_data'], '')",
+                          "ExposedRecords": "@coalesce(outputs('Parse_Response')?['breachInfo']?[item()?['breach']]?['xposed_records'], 0)",
+                          "BreachDescription": "@coalesce(outputs('Parse_Response')?['breachInfo']?[item()?['breach']]?['xposure_desc'], '')",
+                          "BreachLogo": "@coalesce(outputs('Parse_Response')?['breachInfo']?[item()?['breach']]?['logo'], '')",
+                          "IsSearchable": "@if(equals(outputs('Parse_Response')?['breachInfo']?[item()?['breach']]?['searchable'], 'Yes'), true, false)",
+                          "SnapshotId": "@variables('RunId')"
+                        }
+                      },
+                      "runAfter": {
+                        "Get_Batch": [
+                          "Succeeded"
+                        ]
+                      }
+                    },
+                    "Send_To_Sentinel": {
+                      "type": "Http",
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "@{parameters('DCE_Endpoint')}/dataCollectionRules/@{parameters('DCR_ImmutableId')}/streams/Custom-XonBreachDetails_CL?api-version=2023-01-01",
+                        "headers": {
+                          "Content-Type": "application/json"
+                        },
+                        "body": "@body('Transform_Records')",
+                        "authentication": {
+                          "type": "ManagedServiceIdentity",
+                          "audience": "https://monitor.azure.com"
+                        }
+                      },
+                      "runAfter": {
+                        "Transform_Records": [
+                          "Succeeded"
+                        ]
+                      }
+                    },
+                    "Update_Count": {
+                      "type": "IncrementVariable",
+                      "inputs": {
+                        "name": "ProcessedCount",
+                        "value": "@length(outputs('Get_Batch'))"
+                      },
+                      "runAfter": {
+                        "Send_To_Sentinel": [
+                          "Succeeded"
+                        ]
+                      }
+                    }
+                  },
+                  "runAfter": {}
+                }
+              },
+              "else": {
+                "actions": {}
+              },
+              "runAfter": {
+                "Parse_Response": [
+                  "Succeeded"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": {
+          "DCE_Endpoint": {
+            "value": "[reference(resourceId('Microsoft.Insights/dataCollectionEndpoints', variables('dceName')), '2022-06-01').logsIngestion.endpoint]"
+          },
+          "DCR_ImmutableId": {
+            "value": "[reference(resourceId('Microsoft.Insights/dataCollectionRules', variables('dcrName')), '2022-06-01').immutableId]"
+          },
+          "KeyVaultName": {
+            "value": "[variables('keyVaultName')]"
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "xon-kv-role-assignment",
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[resourceId('Microsoft.Logic/workflows', variables('logicAppName'))]"
+      ],
+      "properties": {
+        "mode": "Incremental",
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "parameters": {
+          "keyVaultName": {
+            "value": "[variables('keyVaultName')]"
+          },
+          "principalId": {
+            "value": "[reference(resourceId('Microsoft.Logic/workflows', variables('logicAppName')), '2019-05-01', 'Full').identity.principalId]"
+          },
+          "roleAssignmentName": {
+            "value": "[variables('kvRoleAssignmentName')]"
+          },
+          "roleDefinitionId": {
+            "value": "[variables('keyVaultSecretsUserRoleId')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "keyVaultName": {
+              "type": "string"
+            },
+            "principalId": {
+              "type": "string"
+            },
+            "roleAssignmentName": {
+              "type": "string"
+            },
+            "roleDefinitionId": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.KeyVault/vaults/providers/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[concat(parameters('keyVaultName'), '/Microsoft.Authorization/', parameters('roleAssignmentName'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', parameters('roleDefinitionId'))]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "xon-dcr-role-assignment",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/dataCollectionRules', variables('dcrName'))]",
+        "[resourceId('Microsoft.Logic/workflows', variables('logicAppName'))]"
+      ],
+      "properties": {
+        "mode": "Incremental",
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "parameters": {
+          "dcrName": {
+            "value": "[variables('dcrName')]"
+          },
+          "principalId": {
+            "value": "[reference(resourceId('Microsoft.Logic/workflows', variables('logicAppName')), '2019-05-01', 'Full').identity.principalId]"
+          },
+          "roleAssignmentName": {
+            "value": "[variables('dcrRoleAssignmentName')]"
+          },
+          "roleDefinitionId": {
+            "value": "[variables('monitoringMetricsPublisherRoleId')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "dcrName": {
+              "type": "string"
+            },
+            "principalId": {
+              "type": "string"
+            },
+            "roleAssignmentName": {
+              "type": "string"
+            },
+            "roleDefinitionId": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Insights/dataCollectionRules/providers/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[concat(parameters('dcrName'), '/Microsoft.Authorization/', parameters('roleAssignmentName'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', parameters('roleDefinitionId'))]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "condition": "[parameters('deployWorkbook')]",
+      "type": "Microsoft.Insights/workbooks",
+      "apiVersion": "2022-04-01",
+      "name": "[variables('workbookId')]",
+      "location": "[parameters('location')]",
+      "kind": "shared",
+      "properties": {
+        "displayName": "XposedOrNot Breach Intelligence",
+        "category": "sentinel",
+        "sourceId": "[variables('workspaceResourceId')]",
+        "serializedData": "{\"version\":\"Notebook/1.0\",\"items\":[{\"type\":1,\"content\":{\"json\":\"### \\ud83d\\udee1\\ufe0f Breach exposure data for your monitored domains\\n\\n---\"},\"name\":\"header\"},{\"type\":9,\"content\":{\"version\":\"KqlParameterItem/1.0\",\"parameters\":[{\"id\":\"time-range\",\"version\":\"KqlParameterItem/1.0\",\"name\":\"TimeRange\",\"type\":4,\"isRequired\":true,\"value\":{\"durationMs\":2592000000},\"typeSettings\":{\"selectableValues\":[{\"durationMs\":86400000,\"displayName\":\"Last 24 hours\"},{\"durationMs\":604800000,\"displayName\":\"Last 7 days\"},{\"durationMs\":2592000000,\"displayName\":\"Last 30 days\"},{\"durationMs\":7776000000,\"displayName\":\"Last 90 days\"},{\"durationMs\":31536000000,\"displayName\":\"Last 365 days\"}]},\"label\":\"Time Range\"}]},\"name\":\"parameters\"},{\"type\":1,\"content\":{\"json\":\"## \\ud83d\\udcca Overview\"},\"name\":\"overview-header\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"XonBreachDetails_CL | summarize arg_max(TimeGenerated, *) by Email, BreachName | count\",\"size\":4,\"title\":\"\\ud83d\\udccb Total Records\",\"noDataMessage\":\"0\",\"noDataMessageStyle\":3,\"queryType\":0,\"visualization\":\"tiles\",\"tileSettings\":{\"showBorder\":false,\"leftContent\":{\"columnMatch\":\"Count\",\"formatter\":12,\"formatOptions\":{\"palette\":\"blue\"}}}},\"customWidth\":\"25\",\"name\":\"tile-total\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"XonBreachDetails_CL | summarize arg_max(TimeGenerated, *) by Email, BreachName | summarize Count=dcount(Email)\",\"size\":4,\"title\":\"\\ud83d\\udce7 Unique Emails\",\"noDataMessage\":\"0\",\"noDataMessageStyle\":3,\"queryType\":0,\"visualization\":\"tiles\",\"tileSettings\":{\"showBorder\":false,\"leftContent\":{\"columnMatch\":\"Count\",\"formatter\":12,\"formatOptions\":{\"palette\":\"purple\"}}}},\"customWidth\":\"25\",\"name\":\"tile-emails\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"XonBreachDetails_CL | summarize arg_max(TimeGenerated, *) by Email, BreachName | summarize Count=dcount(Domain)\",\"size\":4,\"title\":\"\\ud83c\\udf10 Domains\",\"noDataMessage\":\"0\",\"noDataMessageStyle\":3,\"queryType\":0,\"visualization\":\"tiles\",\"tileSettings\":{\"showBorder\":false,\"leftContent\":{\"columnMatch\":\"Count\",\"formatter\":12,\"formatOptions\":{\"palette\":\"green\"}}}},\"customWidth\":\"25\",\"name\":\"tile-domains\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"XonBreachDetails_CL | summarize arg_max(TimeGenerated, *) by Email, BreachName | summarize Count=dcount(BreachName)\",\"size\":4,\"title\":\"\\ud83d\\udd25 Unique Breaches\",\"noDataMessage\":\"0\",\"noDataMessageStyle\":3,\"queryType\":0,\"visualization\":\"tiles\",\"tileSettings\":{\"showBorder\":false,\"leftContent\":{\"columnMatch\":\"Count\",\"formatter\":12,\"formatOptions\":{\"palette\":\"redBright\"}}}},\"customWidth\":\"25\",\"name\":\"tile-breaches\"},{\"type\":1,\"content\":{\"json\":\"---\\n## \\u26a1 Action Required\"},\"name\":\"action-header\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"XonBreachDetails_CL | summarize arg_max(TimeGenerated, *) by BreachName | summarize Emails=dcount(Email), PasswordRisk=take_any(PasswordRisk) by BreachName, BreachedDate | order by BreachedDate desc | take 10 | project BreachName, BreachedDate=format_datetime(BreachedDate, 'yyyy-MM-dd'), Emails, PasswordRisk\",\"size\":0,\"title\":\"\\ud83d\\udcc5 Latest Breaches\",\"noDataMessage\":\"Awaiting data sync...\",\"noDataMessageStyle\":3,\"queryType\":0,\"visualization\":\"table\",\"gridSettings\":{\"formatters\":[{\"columnMatch\":\"PasswordRisk\",\"formatter\":18,\"formatOptions\":{\"thresholdsOptions\":\"colors\",\"thresholdsGrid\":[{\"operator\":\"==\",\"thresholdValue\":\"plaintext\",\"representation\":\"#D13438\",\"text\":\"{0}{1}\"},{\"operator\":\"==\",\"thresholdValue\":\"easytocrack\",\"representation\":\"#FF8C00\",\"text\":\"{0}{1}\"},{\"operator\":\"==\",\"thresholdValue\":\"hardtocrack\",\"representation\":\"#107C10\",\"text\":\"{0}{1}\"},{\"operator\":\"Default\",\"representation\":\"#6E6E6E\",\"text\":\"{0}{1}\"}]}}],\"filter\":true}},\"customWidth\":\"50\",\"name\":\"latest-breaches\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"XonBreachDetails_CL | summarize arg_max(TimeGenerated, *) by Email, BreachName | where PasswordRisk == \\\"plaintext\\\" | project Email, Domain, BreachName, BreachedDate=format_datetime(BreachedDate, 'yyyy-MM-dd') | order by BreachedDate desc | take 25\",\"size\":0,\"title\":\"\\ud83d\\udd13 Plaintext Password Exposures\",\"noDataMessage\":\"None found \\u2713\",\"noDataMessageStyle\":3,\"queryType\":0,\"visualization\":\"table\",\"gridSettings\":{\"filter\":true}},\"customWidth\":\"50\",\"name\":\"plaintext\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"XonBreachDetails_CL | summarize arg_max(TimeGenerated, *) by Email, BreachName | summarize BreachCount=dcount(BreachName), Breaches=make_set(BreachName), Domain=take_any(Domain) by Email | where BreachCount > 1 | order by BreachCount desc | take 15 | project Email, Domain, BreachCount, Breaches=strcat_array(Breaches, ', ')\",\"size\":0,\"title\":\"\\ud83d\\udc65 Most Exposed Emails (Multiple Breaches)\",\"noDataMessage\":\"No repeat exposures found\",\"noDataMessageStyle\":3,\"queryType\":0,\"visualization\":\"table\",\"gridSettings\":{\"formatters\":[{\"columnMatch\":\"BreachCount\",\"formatter\":4,\"formatOptions\":{\"palette\":\"redBright\"}}],\"filter\":true}},\"customWidth\":\"50\",\"name\":\"repeat-exposures\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"XonBreachDetails_CL | summarize arg_max(TimeGenerated, *) by Email, BreachName | summarize Count=count() by PasswordRisk | order by Count desc\",\"size\":0,\"title\":\"\\ud83c\\udfaf Password Risk Distribution\",\"noDataMessage\":\"Awaiting data sync...\",\"noDataMessageStyle\":3,\"queryType\":0,\"visualization\":\"piechart\",\"chartSettings\":{\"seriesLabelSettings\":[{\"seriesName\":\"unknown\",\"color\":\"#6E6E6E\"},{\"seriesName\":\"hardtocrack\",\"color\":\"#107C10\"},{\"seriesName\":\"easytocrack\",\"color\":\"#FF8C00\"},{\"seriesName\":\"plaintext\",\"color\":\"#D13438\"}]}},\"customWidth\":\"50\",\"name\":\"password-risk\"},{\"type\":1,\"content\":{\"json\":\"---\\n## \\ud83d\\udd0e Detailed Analysis\"},\"name\":\"analysis-header\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"XonBreachDetails_CL | summarize arg_max(TimeGenerated, *) by Email, BreachName | summarize Records=count(), Emails=dcount(Email), TotalExposed=sum(ExposedRecords) by BreachName | order by Emails desc | take 10\",\"size\":0,\"title\":\"\\ud83d\\udd25 Top 10 Breaches\",\"noDataMessage\":\"Awaiting data sync...\",\"noDataMessageStyle\":3,\"queryType\":0,\"visualization\":\"table\",\"gridSettings\":{\"formatters\":[{\"columnMatch\":\"Records\",\"formatter\":4,\"formatOptions\":{\"palette\":\"redGreen\"}},{\"columnMatch\":\"TotalExposed\",\"formatter\":4,\"formatOptions\":{\"palette\":\"red\"}}]}},\"customWidth\":\"67\",\"name\":\"top-breaches\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"XonBreachDetails_CL | summarize arg_max(TimeGenerated, *) by Email, BreachName | summarize Emails=dcount(Email) by Domain | order by Emails desc | take 10\",\"size\":0,\"title\":\"\\ud83c\\udfe2 Top Domains by Exposed Emails\",\"noDataMessage\":\"Awaiting data sync...\",\"noDataMessageStyle\":3,\"queryType\":0,\"visualization\":\"piechart\"},\"customWidth\":\"33\",\"name\":\"domains-pie\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"XonBreachDetails_CL | summarize arg_max(TimeGenerated, *) by Email, BreachName | project BreachedDate=format_datetime(BreachedDate, 'yyyy-MM-dd'), Email, EmailDomain, Domain, BreachName, PasswordRisk, ExposedRecords | order by BreachedDate desc | take 50\",\"size\":0,\"title\":\"\\ud83d\\udd0e Breach Exposure Summary\",\"noDataMessage\":\"Awaiting data sync...\",\"noDataMessageStyle\":3,\"queryType\":0,\"visualization\":\"table\",\"gridSettings\":{\"formatters\":[{\"columnMatch\":\"PasswordRisk\",\"formatter\":18,\"formatOptions\":{\"thresholdsOptions\":\"colors\",\"thresholdsGrid\":[{\"operator\":\"==\",\"thresholdValue\":\"plaintext\",\"representation\":\"#D13438\",\"text\":\"{0}{1}\"},{\"operator\":\"==\",\"thresholdValue\":\"easytocrack\",\"representation\":\"#FF8C00\",\"text\":\"{0}{1}\"},{\"operator\":\"==\",\"thresholdValue\":\"hardtocrack\",\"representation\":\"#107C10\",\"text\":\"{0}{1}\"},{\"operator\":\"Default\",\"representation\":\"#6E6E6E\",\"text\":\"{0}{1}\"}]}}],\"filter\":true}},\"name\":\"detections-table\"},{\"type\":1,\"content\":{\"json\":\"---\\n## \\ud83d\\udcc8 Trends\"},\"name\":\"trends-header\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"XonBreachDetails_CL | summarize arg_max(TimeGenerated, *) by Email, BreachName | where isnotempty(BreachedDate) | summarize Count=count() by bin(BreachedDate, 1d) | order by BreachedDate asc\",\"size\":0,\"title\":\"\\ud83d\\udcc8 Breach Records by Date\",\"noDataMessage\":\"Awaiting data sync...\",\"noDataMessageStyle\":3,\"timeContext\":{\"durationMs\":31536000000},\"queryType\":0,\"visualization\":\"areachart\",\"chartSettings\":{\"yAxis\":[\"Count\"],\"seriesLabelSettings\":[{\"seriesName\":\"Count\",\"color\":\"blue\"}]}},\"name\":\"timeline\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"XonBreachDetails_CL | summarize arg_max(TimeGenerated, *) by Email, BreachName | where isnotempty(ExposedDataTypes) | extend DataTypes = split(ExposedDataTypes, ';') | mv-expand DataType = DataTypes | where isnotempty(DataType) | summarize Count=count() by tostring(DataType) | order by Count desc | take 15\",\"size\":0,\"title\":\"\\ud83d\\udcca Exposed Data Types\",\"noDataMessage\":\"Awaiting data sync...\",\"noDataMessageStyle\":3,\"queryType\":0,\"visualization\":\"barchart\",\"chartSettings\":{\"xAxis\":\"DataType\",\"yAxis\":[\"Count\"],\"seriesLabelSettings\":[{\"seriesName\":\"Count\",\"color\":\"blue\"}]}},\"customWidth\":\"50\",\"name\":\"data-types\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"XonBreachDetails_CL | summarize arg_max(TimeGenerated, *) by Email, BreachName | where isnotempty(BreachedDate) | summarize Count=count() by bin(BreachedDate, 365d) | order by BreachedDate asc\",\"size\":0,\"title\":\"\\ud83d\\udcc5 Breaches by Year\",\"noDataMessage\":\"Awaiting data sync...\",\"noDataMessageStyle\":3,\"queryType\":0,\"visualization\":\"barchart\",\"chartSettings\":{\"xAxis\":\"BreachedDate\",\"yAxis\":[\"Count\"],\"seriesLabelSettings\":[{\"seriesName\":\"Count\",\"color\":\"purple\"}]}},\"customWidth\":\"50\",\"name\":\"breaches-timeline\"},{\"type\":1,\"content\":{\"json\":\"---\\n*Data sourced from [XposedOrNot](https://xposedornot.com) \\u2022 Microsoft Sentinel*\"},\"name\":\"footer\"}],\"$schema\":\"https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json\"}"
+      }
+    },
+    {
+      "condition": "[parameters('deployAnalyticsRule')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "xon-analytics-rule",
+      "resourceGroup": "[parameters('workspaceResourceGroup')]",
+      "dependsOn": [
+        "xon-custom-table"
+      ],
+      "properties": {
+        "mode": "Incremental",
+        "expressionEvaluationOptions": {
+          "scope": "outer"
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "resources": [
+            {
+              "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+              "apiVersion": "2023-11-01",
+              "name": "[concat(parameters('workspaceName'), '/Microsoft.SecurityInsights/xon-new-breach-detection')]",
+              "kind": "Scheduled",
+              "properties": {
+                "displayName": "XposedOrNot - New Breach Exposure Detected",
+                "description": "Creates an incident when new breach exposures are detected for monitored domains. Note: Enable this rule after initial data sync completes (~24 hours).",
+                "severity": "Medium",
+                "enabled": false,
+                "query": "let baseline = toscalar(XonBreachDetails_CL | where TimeGenerated < ago(1h) | count) > 0;\nlet newRecords = XonBreachDetails_CL\n| where TimeGenerated >= ago(1h)\n| summarize TimeGenerated=max(TimeGenerated), Domain=take_any(Domain), EmailDomain=take_any(EmailDomain), PasswordRisk=take_any(PasswordRisk), ExposedDataTypes=take_any(ExposedDataTypes), ExposedRecords=take_any(ExposedRecords), BreachedDate=take_any(BreachedDate) by Email, BreachName;\nlet existing = XonBreachDetails_CL | where TimeGenerated < ago(1h) | distinct Email, BreachName;\nnewRecords | join kind=leftanti existing on Email, BreachName | where baseline == true | project TimeGenerated, Email, EmailDomain, Domain, BreachName, BreachedDate, PasswordRisk, ExposedDataTypes, ExposedRecords",
+                "queryFrequency": "PT1H",
+                "queryPeriod": "P7D",
+                "triggerOperator": "GreaterThan",
+                "triggerThreshold": 0,
+                "suppressionDuration": "PT1H",
+                "suppressionEnabled": false,
+                "tactics": [
+                  "InitialAccess",
+                  "CredentialAccess"
+                ],
+                "techniques": [
+                  "T1078",
+                  "T1110"
+                ],
+                "incidentConfiguration": {
+                  "createIncident": true,
+                  "groupingConfiguration": {
+                    "enabled": true,
+                    "reopenClosedIncident": false,
+                    "lookbackDuration": "PT24H",
+                    "matchingMethod": "Selected",
+                    "groupByCustomDetails": [
+                      "BreachName"
+                    ]
+                  }
+                },
+                "entityMappings": [
+                  {
+                    "entityType": "Account",
+                    "fieldMappings": [
+                      {
+                        "identifier": "Name",
+                        "columnName": "Email"
+                      }
+                    ]
+                  },
+                  {
+                    "entityType": "DNS",
+                    "fieldMappings": [
+                      {
+                        "identifier": "DomainName",
+                        "columnName": "Domain"
+                      }
+                    ]
+                  }
+                ],
+                "customDetails": {
+                  "BreachName": "BreachName",
+                  "PasswordRisk": "PasswordRisk",
+                  "Domain": "Domain"
+                },
+                "alertDetailsOverride": {
+                  "alertDisplayNameFormat": "New Breach: {{BreachName}}",
+                  "alertDescriptionFormat": "New breach exposure for {{Domain}}: {{BreachName}} (Risk: {{PasswordRisk}})"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "logicAppName": {
+      "type": "string",
+      "value": "[variables('logicAppName')]"
+    },
+    "logicAppResourceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Logic/workflows', variables('logicAppName'))]"
+    },
+    "keyVaultName": {
+      "type": "string",
+      "value": "[variables('keyVaultName')]"
+    },
+    "dcrName": {
+      "type": "string",
+      "value": "[variables('dcrName')]"
+    },
+    "postDeploymentSteps": {
+      "type": "string",
+      "value": "## Post-Deployment\n\nYour XposedOrNot connector is now active!\n\n**Timeline:**\n- ~2 min: First data sync runs automatically\n- ~5-7 min: Data appears in workbook\n\n**Verify data:**\n```kql\nXonBreachDetails_CL | take 10\n```\n\n**Enable Analytics Rule (after 24h of data):**\n- Go to Sentinel \u2192 Analytics \u2192 Find 'XposedOrNot' rule \u2192 Enable"
+    }
+  }
+}

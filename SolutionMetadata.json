@@ -1,0 +1,14 @@
+{
+  "publisherId": "xposedornot",
+  "offerId": "azure-sentinel-solution-xposedornot",
+  "firstPublishDate": "2026-02-01",
+  "providers": ["XposedOrNot"],
+  "categories": {
+    "domains": ["Security - Threat Intelligence", "Identity"]
+  },
+  "support": {
+    "name": "XposedOrNot",
+    "tier": "Partner",
+    "link": "https://plus.xposedornot.com/contact"
+  }
+}

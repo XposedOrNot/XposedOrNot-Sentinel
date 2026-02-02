@@ -1,0 +1,73 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "workspaceName": {
+      "type": "string"
+    },
+    "workspaceResourceGroup": {
+      "type": "string"
+    }
+  },
+  "variables": {
+    "workspaceId": "[resourceId(parameters('workspaceResourceGroup'), 'Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(parameters('workspaceName'), '/Microsoft.SecurityInsights/xon-breach-detection')]",
+      "kind": "Scheduled",
+      "properties": {
+        "displayName": "XposedOrNot - New Breach Detected",
+        "description": "Triggers an incident when XposedOrNot detects NEW breaches not previously seen. Skips alerting on first run (baseline establishment).",
+        "severity": "Medium",
+        "enabled": true,
+        "query": "// Check if baseline data exists (data older than query period)\nlet hasBaseline = toscalar(\n    XonBreachDetails_CL \n    | where TimeGenerated < ago(1h) \n    | take 1\n    | count\n) > 0;\n// Get new records from last hour\nlet newRecords = XonBreachDetails_CL\n| where TimeGenerated >= ago(1h)\n| summarize \n    TimeGenerated = max(TimeGenerated),\n    Domain = take_any(Domain),\n    EmailDomain = take_any(EmailDomain),\n    PasswordRisk = take_any(PasswordRisk),\n    ExposedDataTypes = take_any(ExposedDataTypes),\n    ExposedRecords = take_any(ExposedRecords),\n    BreachedDate = take_any(BreachedDate)\n    by Email, BreachName;\n// Get previously seen email+breach combos\nlet existingRecords = XonBreachDetails_CL  \n| where TimeGenerated < ago(1h)\n| distinct Email, BreachName;\n// Return only truly new breaches (not seen before) AND only if baseline exists\nnewRecords\n| join kind=leftanti existingRecords on Email, BreachName\n| where hasBaseline == true\n| project TimeGenerated, Email, EmailDomain, Domain, BreachName, BreachedDate, PasswordRisk, ExposedDataTypes, ExposedRecords",
+        "queryFrequency": "PT1H",
+        "queryPeriod": "P7D",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionDuration": "PT1H",
+        "suppressionEnabled": false,
+        "tactics": ["InitialAccess", "CredentialAccess"],
+        "techniques": ["T1078", "T1110"],
+        "incidentConfiguration": {
+          "createIncident": true,
+          "groupingConfiguration": {
+            "enabled": true,
+            "reopenClosedIncident": false,
+            "lookbackDuration": "PT24H",
+            "matchingMethod": "Selected",
+            "groupByEntities": [],
+            "groupByAlertDetails": [],
+            "groupByCustomDetails": ["BreachName"]
+          }
+        },
+        "entityMappings": [
+          {
+            "entityType": "Account",
+            "fieldMappings": [
+              { "identifier": "Name", "columnName": "Email" }
+            ]
+          },
+          {
+            "entityType": "DNS",
+            "fieldMappings": [
+              { "identifier": "DomainName", "columnName": "Domain" }
+            ]
+          }
+        ],
+        "customDetails": {
+          "BreachName": "BreachName",
+          "PasswordRisk": "PasswordRisk",
+          "Domain": "Domain"
+        },
+        "alertDetailsOverride": {
+          "alertDisplayNameFormat": "New Breach Detected: {{BreachName}}",
+          "alertDescriptionFormat": "New breach exposure detected for {{Domain}}. Breach: {{BreachName}}. Risk: {{PasswordRisk}}"
+        }
+      }
+    }
+  ]
+}

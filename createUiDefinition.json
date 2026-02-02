@@ -1,0 +1,173 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
+  "handler": "Microsoft.Azure.CreateUIDef",
+  "version": "0.1.2-preview",
+  "parameters": {
+    "config": {
+      "isWizard": true,
+      "basics": {
+        "description": "## XposedOrNot for Microsoft Sentinel\n\n**Breach Intelligence Data Connector**\n\nThis solution deploys:\n- 📡 **Data Connector** - Pulls breach data from XposedOrNot API\n- 📊 **Workbook** - Breach intelligence dashboard\n- 🔔 **Analytics Rule** - Incident detection for new breaches\n\n[Learn more](https://xposedornot.com) | [Get API Key](https://plus.xposedornot.com)",
+        "location": {
+          "label": "Location",
+          "resourceTypes": ["Microsoft.Logic/workflows", "Microsoft.Insights/workbooks"]
+        }
+      }
+    },
+    "basics": [
+      {
+        "name": "workspaceSelector",
+        "type": "Microsoft.Solutions.ResourceSelector",
+        "label": "Log Analytics Workspace",
+        "toolTip": "Select the Log Analytics workspace with Microsoft Sentinel enabled",
+        "resourceType": "Microsoft.OperationalInsights/workspaces",
+        "options": {
+          "filter": {
+            "subscription": "onBasics",
+            "location": "onBasics"
+          }
+        }
+      }
+    ],
+    "steps": [
+      {
+        "name": "apiConfiguration",
+        "label": "API Configuration",
+        "elements": [
+          {
+            "name": "apiInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "Get your API key from [plus.xposedornot.com](https://plus.xposedornot.com). Free trial available."
+            }
+          },
+          {
+            "name": "xonApiKey",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "XposedOrNot API Key"
+            },
+            "toolTip": "Your API key from plus.xposedornot.com",
+            "constraints": {
+              "required": true,
+              "regex": "^.{10,}$",
+              "validationMessage": "API key must be at least 10 characters"
+            },
+            "options": {
+              "hideConfirmation": true
+            }
+          },
+          {
+            "name": "pollingFrequency",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Polling Frequency",
+            "defaultValue": "Every 12 hours",
+            "toolTip": "How often to sync breach data",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "Every hour", "value": 1 },
+                { "label": "Every 6 hours", "value": 6 },
+                { "label": "Every 12 hours", "value": 12 },
+                { "label": "Every 24 hours", "value": 24 }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "name": "components",
+        "label": "Components",
+        "elements": [
+          {
+            "name": "deployWorkbook",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Deploy Workbook (Dashboard)",
+            "toolTip": "Deploys a Sentinel workbook with breach analytics and risk analysis",
+            "defaultValue": true
+          },
+          {
+            "name": "deployAnalyticsRule",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Deploy Analytics Rule",
+            "toolTip": "Deploys a detection rule that creates incidents for new breaches (starts disabled)",
+            "defaultValue": true
+          }
+        ]
+      },
+      {
+        "name": "postDeployment",
+        "label": "Post-Deployment",
+        "elements": [
+          {
+            "name": "stepsHeader",
+            "type": "Microsoft.Common.TextBlock",
+            "options": {
+              "text": "After deployment completes, follow these steps:"
+            }
+          },
+          {
+            "name": "step0",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Warning",
+              "text": "**Step 0: Grant Key Vault Access** (Required)\n\nThe Key Vault uses RBAC. Grant yourself **Key Vault Secrets Officer** role:\n\nGo to **Resource Group** → **kv-xon-[suffix]** → **Access control (IAM)** → **Add role assignment** → Select **Key Vault Secrets Officer** → Add yourself → **Save**\n\n⏳ Wait 2-3 minutes for propagation."
+            }
+          },
+          {
+            "name": "step1",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "**Step 1: Authorize Connection**\n\nGo to **Resource Group** → **API Connections** → Click the Key Vault connection → **Edit API connection** → **Authorize** → **Save**"
+            }
+          },
+          {
+            "name": "step2",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "**Step 2: Enable Logic App**\n\nThe Logic App deploys in a disabled state. Enable it via Azure Portal or CLI:\n\n`az logic workflow update -g <rg> -n <name> --state Enabled`"
+            }
+          },
+          {
+            "name": "step3",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "**Step 3: Trigger First Sync**\n\nManually run the Logic App or wait for the scheduled trigger. Data appears in ~5 minutes."
+            }
+          },
+          {
+            "name": "step4",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "**Step 4: Enable Analytics Rule** (After 24h)\n\nOnce you have baseline data, enable the analytics rule in **Sentinel** → **Analytics** to start detecting new breaches."
+            }
+          },
+          {
+            "name": "scriptInfo",
+            "type": "Microsoft.Common.TextBlock",
+            "options": {
+              "text": "Alternatively, run the setup.sh script from the GitHub repo to automate steps 1-3.",
+              "link": {
+                "label": "View setup.sh",
+                "uri": "https://github.com/xposedornot/XposedOrNot-Sentinel/blob/main/setup.sh"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "outputs": {
+      "workspaceName": "[last(split(basics('workspaceSelector').id, '/'))]",
+      "workspaceResourceGroup": "[first(skip(split(basics('workspaceSelector').id, '/'), 4))]",
+      "xonApiKey": "[steps('apiConfiguration').xonApiKey]",
+      "pollingFrequencyHours": "[steps('apiConfiguration').pollingFrequency]",
+      "deployWorkbook": "[steps('components').deployWorkbook]",
+      "deployAnalyticsRule": "[steps('components').deployAnalyticsRule]",
+      "location": "[location()]"
+    }
+  }
+}
